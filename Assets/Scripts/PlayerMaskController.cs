@@ -6,7 +6,7 @@ using UnityEngine.Rendering;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
-
+[RequireComponent(typeof(AudioSource))]
 public class PlayerMaskController : MonoBehaviour
 {
     [Header("Mask Speed Settings")]
@@ -32,6 +32,16 @@ public class PlayerMaskController : MonoBehaviour
     public float guardCooldownSpeed = 1.0f;
     public Slider guardDurationSlider;
     public GameObject guardBarContainer;
+
+    [Range(0f, 1f)] public float audioVolume = 0.3f;
+
+    [Header("Audio Settings")]
+    public AudioClip guardWarningClip;
+    public AudioClip guardRechargeClip;
+    public AudioClip statueTransformClip;
+    public float warningThreshold = 5.0f; // Ses kaç saniye kala çalsýn? (5 sn dediðin için 5.0f)
+    private AudioSource _audioSource;
+    private bool _hasPlayedWarningSound = false;
 
     [Header("Blackout Settings")]
     public Light sunLight;
@@ -65,6 +75,10 @@ public class PlayerMaskController : MonoBehaviour
         _input = GetComponent<StarterAssetsInputs>();
         _animator = GetComponent<Animator>();
 
+        _audioSource = GetComponent<AudioSource>();
+        _audioSource.playOnAwake = false;
+        _audioSource.volume = audioVolume;
+
         if (mainCamera == null) mainCamera = Camera.main;
 
         if (mainCamera != null)
@@ -72,6 +86,7 @@ public class PlayerMaskController : MonoBehaviour
             _defaultClearFlags = mainCamera.clearFlags;
             _defaultBackgroundColor = mainCamera.backgroundColor;
         }
+
 
         _defaultSkybox = RenderSettings.skybox;
         _defaultAmbientMode = RenderSettings.ambientMode;
@@ -110,6 +125,10 @@ public class PlayerMaskController : MonoBehaviour
 
     void Update()
     {
+        if (_audioSource.volume != audioVolume)
+        {
+            _audioSource.volume = audioVolume;
+        }
         if (Input.GetKeyDown(KeyCode.Alpha1)) SwitchMask(MaskType.Thief);
 
         if (Input.GetKeyDown(KeyCode.Alpha2) && !_isGuardDepleted) SwitchMask(MaskType.Guard);
@@ -126,11 +145,24 @@ public class PlayerMaskController : MonoBehaviour
 
     void HandleGuardDuration()
     {
+        // --- DURUM 1: MASKE TAKILI (Süre Azalýyor) ---
         if (currentMask == MaskType.Guard)
         {
             if (guardBarContainer) guardBarContainer.SetActive(true);
 
             _currentGuardTime -= Time.deltaTime;
+
+            // 1. Uyarý Sesi (Warning)
+            if (_currentGuardTime <= warningThreshold && !_hasPlayedWarningSound)
+            {
+                if (guardWarningClip != null)
+                {
+                    _audioSource.loop = false; // Uyarý sesi loop olmamalý
+                    _audioSource.clip = guardWarningClip;
+                    _audioSource.Play();
+                }
+                _hasPlayedWarningSound = true;
+            }
 
             if (_currentGuardTime <= 0)
             {
@@ -139,6 +171,7 @@ public class PlayerMaskController : MonoBehaviour
                 SwitchMask(MaskType.Thief);
             }
         }
+        // --- DURUM 2: MASKE TAKILI DEÐÝL (Bar Doluyor) ---
         else
         {
             if (_currentGuardTime < maxGuardDuration)
@@ -147,16 +180,47 @@ public class PlayerMaskController : MonoBehaviour
 
                 _currentGuardTime += Time.deltaTime * guardCooldownSpeed;
 
+                // 2. YENÝ: Þarj Olma Sesi (Recharge Loop)
+                // Eðer þarj sesi tanýmlýysa VE þu an çalmýyorsa baþlat
+                if (guardRechargeClip != null)
+                {
+                    // Eðer hiç ses çalmýyorsa VEYA çalan ses uyarý sesiyse (onu kesip þarja geç)
+                    if (!_audioSource.isPlaying || _audioSource.clip == guardWarningClip)
+                    {
+                        _audioSource.clip = guardRechargeClip;
+                        _audioSource.loop = true; // Þarj sesi sürekli dönsün
+                        _audioSource.Play();
+                    }
+                }
+
+                // Uyarý sesi kilidini sýfýrla (tekrar maskeyi takýnca çabuk çalsýn diye deðil, mantýk sýfýrlansýn diye)
+                _hasPlayedWarningSound = false;
+
                 if (_currentGuardTime >= maxGuardDuration)
                 {
+                    // DOLUM BÝTTÝ
                     _currentGuardTime = maxGuardDuration;
                     _isGuardDepleted = false;
                     if (guardBarContainer) guardBarContainer.SetActive(false);
+
+                    // Sesi Durdur
+                    if (_audioSource.clip == guardRechargeClip)
+                    {
+                        _audioSource.Stop();
+                        _audioSource.loop = false;
+                    }
                 }
             }
             else
             {
                 if (guardBarContainer) guardBarContainer.SetActive(false);
+
+                // Garanti olsun: Doluysa ve hala þarj sesi çalýyorsa sustur
+                if (_audioSource.clip == guardRechargeClip && _audioSource.isPlaying)
+                {
+                    _audioSource.Stop();
+                    _audioSource.loop = false;
+                }
             }
         }
 
@@ -178,11 +242,32 @@ public class PlayerMaskController : MonoBehaviour
     {
         if (newMask == MaskType.Guard && _isGuardDepleted) return;
 
+        // --- SES KONTROLÜ (Geçiþlerde) ---
+
+        // 1. Eðer Guard maskesine geçiyorsak: Þarj sesini (loop) hemen kesmeliyiz.
+        if (newMask == MaskType.Guard)
+        {
+            if (_audioSource.clip == guardRechargeClip && _audioSource.isPlaying)
+            {
+                _audioSource.Stop();
+                _audioSource.loop = false;
+            }
+        }
+        // 2. Eðer Guard maskesinden çýkýyorsak: Uyarý sesini kesmeliyiz.
+        else if (currentMask == MaskType.Guard)
+        {
+            if (_audioSource.clip == guardWarningClip && _audioSource.isPlaying)
+            {
+                _audioSource.Stop();
+            }
+        }
+        // --------------------------------
+
         currentMask = newMask;
 
         ResetWorld();
         ActivateMaskModel(currentMask);
-        UpdateUI(currentMask); // UI Güncellemesi burada çaðrýlýyor
+        UpdateUI(currentMask);
 
         switch (currentMask)
         {
@@ -197,6 +282,11 @@ public class PlayerMaskController : MonoBehaviour
             case MaskType.Statue:
                 SetMovement(0.0f, 0.0f, 0.0f, -15.0f);
                 GoPitchBlack();
+                if (statueTransformClip != null)
+                {
+                    _audioSource.loop = false; // Loop'u kapat (Guard'dan geliyorsak açýk kalmýþ olabilir)
+                    _audioSource.PlayOneShot(statueTransformClip);
+                }
                 break;
         }
     }
