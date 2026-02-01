@@ -3,95 +3,101 @@ using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using UnityEngine.Video;
 using System.Collections;
-using System.Collections.Generic; // Listeler için
-using TMPro; // TextMeshPro için
+using System.Collections.Generic;
+using TMPro;
 
 public class MenuManager : MonoBehaviour
 {
-    [Header("GEREKLÝ OBJELER")]
-    public GameObject uiButtons;       // Play, Quit vs. butonlarýn olduðu obje
-    public GameObject background;      // Arkadaki sabit resim
-    public GameObject videoScreenObj;  // VideoScreen (RawImage)
-    public VideoPlayer videoPlayer;    // VideoScreen üzerindeki Player
-    public CanvasGroup perdeObjesi;    // Siyah Perde (Canvas Group)
+    [Header("UI Objects")]
+    public GameObject uiButtons;       // Play, Quit buttons container
+    public GameObject staticBackground; // The static image background
+    public GameObject videoScreen;     // The RawImage object showing the video
+    public VideoPlayer videoPlayer;    // The VideoPlayer component
+    public CanvasGroup blackoutPanel;  // The black fade panel
 
-    [Header("AYARLAR")]
-    public float videoSuresi = 5.0f;   // DÝKKAT: Videon kaç saniyeyse buraya yaz!
-    public float kararmaSuresi = 1.0f; // Son kaç saniyede ekran kararsýn?
+    [Header("Settings")]
+    public float videoDuration = 5.0f; // MANUAL TIME: Write your video length here (e.g., 12)
+    public float fadeDuration = 1.0f;
 
-    [Header("LEADERBOARD")]
+    [Header("Leaderboard")]
     public GameObject leaderboardPanel;
     public Transform scoreContainer;
     public GameObject rowPrefab;
 
     void Start()
     {
-        Time.timeScale = 1f; // Zamanýn aktýðýndan emin ol
-        if (perdeObjesi != null) perdeObjesi.alpha = 0;
-        if (videoScreenObj != null) videoScreenObj.SetActive(false);
+        // Reset everything on start
+        Time.timeScale = 1f;
+        if (blackoutPanel != null) blackoutPanel.alpha = 0;
+        //if (videoScreen != null) videoScreen.SetActive(false); // Hide video initially
         if (leaderboardPanel != null) leaderboardPanel.SetActive(false);
     }
 
-    // PLAY BUTONU BUNU ÇAÐIRACAK
     public void PlayGame()
     {
-        StartCoroutine(SinematikGecis());
+        StartCoroutine(PlayTransitionSequence());
     }
 
-    IEnumerator SinematikGecis()
+    IEnumerator PlayTransitionSequence()
     {
-        // 1. Butonlarý yok et
+        // 1. Butonlarý Gizle
         if (uiButtons != null) uiButtons.SetActive(false);
 
-        // 2. Videoyu Aç ve Oynat
-        if (videoScreenObj != null && videoPlayer != null)
+        // 2. VÝDEO EKRANINI AÇ (Ama Arka Planý Henüz Kapatma!)
+        if (videoScreen != null)
         {
-            videoScreenObj.SetActive(true); // Ekraný aç
-            if (background != null) background.SetActive(false); // Arkadaki resmi kapat
+            videoScreen.SetActive(true);
+        }
 
-            videoPlayer.Play(); // Videoyu baþlat
+        // Objenin aktifleþmesi için minik bir nefes aldýr
+        yield return null;
 
-            // 3. Bekleme (Manuel Süre ile)
-            // Kararma süresini düþüyoruz ki video bitmeden ekran kararmaya baþlasýn
-            float bekleme = videoSuresi - kararmaSuresi;
-            if (bekleme < 0) bekleme = 0;
+        // 3. VÝDEOYU BAÞLAT
+        if (videoPlayer != null)
+        {
+            videoPlayer.Play();
 
-            yield return new WaitForSeconds(bekleme);
+            // --- KRÝTÝK DÜZELTME BURASI ---
+            // Video oynatmaya baþlasa bile ilk görüntünün gelmesi 0.1-0.2 saniye sürebilir.
+            // Bu yüzden arka plan resmini (staticBackground) hemen kapatmýyoruz.
+            // Video resmin üstüne tam binene kadar 0.2 saniye bekliyoruz.
+            yield return new WaitForSeconds(0.2f);
+
+            // Görüntü artýk geldi, þimdi arkadakini silebiliriz (Performans için)
+            if (staticBackground != null) staticBackground.SetActive(false);
+
+            // 4. KALAN SÜREYÝ BEKLE
+            // 0.2 saniye beklediðimiz için onu toplam süreden düþmeliyiz
+            float waitTime = videoDuration - fadeDuration - 0.2f;
+            if (waitTime < 0) waitTime = 0;
+
+            yield return new WaitForSeconds(waitTime);
         }
         else
         {
-            // Video yoksa bekleme yapma
-            yield return new WaitForSeconds(0.1f);
+            yield return new WaitForSeconds(1.0f);
         }
 
-        // 4. Kararma Efekti (Fade Out)
-        if (perdeObjesi != null)
+        // 5. KARARMA EFEKTÝ
+        if (blackoutPanel != null)
         {
-            float gecenSure = 0f;
-            while (gecenSure < kararmaSuresi)
+            float timer = 0f;
+            while (timer < fadeDuration)
             {
-                gecenSure += Time.deltaTime;
-                perdeObjesi.alpha = gecenSure / kararmaSuresi;
+                timer += Time.deltaTime;
+                blackoutPanel.alpha = timer / fadeDuration;
                 yield return null;
             }
-            perdeObjesi.alpha = 1;
+            blackoutPanel.alpha = 1;
         }
 
-        // 5. Oyuna Geç
-        SceneManager.LoadScene("SampleScene");
+        // 6. SAHNE YÜKLEME
+        SceneManager.LoadScene("Playground");
     }
 
-    // --- LEADERBOARD FONKSÝYONLARI (Ayný kaldý) ---
-    public void OpenLeaderboard()
-    {
-        leaderboardPanel.SetActive(true);
-        LoadScores();
-    }
-
-    public void CloseLeaderboard()
-    {
-        leaderboardPanel.SetActive(false);
-    }
+    // --- Leaderboard Methods (No Changes) ---
+    public void OpenLeaderboard() { leaderboardPanel.SetActive(true); LoadScores(); }
+    public void CloseLeaderboard() { leaderboardPanel.SetActive(false); }
 
     void LoadScores()
     {
@@ -99,7 +105,6 @@ public class MenuManager : MonoBehaviour
         string jsonString = PlayerPrefs.GetString("LeaderboardTable", "{}");
         LeaderboardData data = JsonUtility.FromJson<LeaderboardData>(jsonString);
         if (data == null || data.entryList == null) return;
-
         int rank = 1;
         foreach (ScoreEntry entry in data.entryList)
         {
